@@ -36,10 +36,13 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
       def topLevelConstraint(found: Type): List[Constraint] =
         List(Constraint(found, expected, e.position))
 
-      def boolBinaryOp(lhs: Expr, rhs: Expr): List[Constraint] = {
-        val freshOperand = TypeVariable.fresh()
-        genConstraints(lhs, freshOperand) ++
-        genConstraints(rhs, freshOperand) ++
+      def boolBinaryOp(lhs: Expr, rhs: Expr, ooperandType: Option[Type]): List[Constraint] = {
+        val operandType = ooperandType match {
+          case None => TypeVariable.fresh()
+          case Some(tpe) => tpe
+        }
+        genConstraints(lhs, operandType) ++
+        genConstraints(rhs, operandType) ++
         topLevelConstraint(BooleanType)
         // Not sure about the ordering of this
       }
@@ -72,18 +75,18 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
         case Div(lhs, rhs) => simpleBinaryOp(lhs, rhs, IntType)
         case Mod(lhs, rhs) => simpleBinaryOp(lhs, rhs, IntType)
 
-        case LessThan(lhs, rhs) => boolBinaryOp(lhs, rhs)
-        case LessEquals(lhs, rhs) => boolBinaryOp(lhs, rhs)
-        case And(lhs, rhs) => boolBinaryOp(lhs, rhs)
-        case Or(lhs, rhs) => boolBinaryOp(lhs, rhs)
-        case Equals(lhs, rhs) => boolBinaryOp(lhs, rhs)
+        case LessThan(lhs, rhs) => boolBinaryOp(lhs, rhs, Some(IntType))
+        case LessEquals(lhs, rhs) => boolBinaryOp(lhs, rhs, Some(IntType))
+        case And(lhs, rhs) => boolBinaryOp(lhs, rhs, Some(BooleanType))
+        case Or(lhs, rhs) => boolBinaryOp(lhs, rhs, Some(BooleanType))
+        case Equals(lhs, rhs) => boolBinaryOp(lhs, rhs, None)
 
         case Concat(lhs, rhs) => simpleBinaryOp(lhs, rhs, StringType)
 
         case Not(e) =>
           genConstraints(e, BooleanType) ++ topLevelConstraint(BooleanType)
         case Neg(e) =>
-          genConstraints(e, IntType) ++ topLevelConstraint(BooleanType)
+          genConstraints(e, IntType) ++ topLevelConstraint(IntType)
 
         case Call(qname, args) => {
           table.getFunction(qname) match {
