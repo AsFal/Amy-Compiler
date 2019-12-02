@@ -13,3 +13,4 @@ compiler/package-lock.json
 .metals/
 project/*
 .vscode/
+submission.zip
