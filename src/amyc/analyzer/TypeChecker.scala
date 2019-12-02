@@ -30,40 +30,126 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
     //  extend these, e.g., to account for local variables).
     // Returns a list of constraints among types. These will later be solved via unification.
     def genConstraints(e: Expr, expected: Type)(implicit env: Map[Identifier, Type]): List[Constraint] = {
-      
+
       // This helper returns a list of a single constraint recording the type
       //  that we found (or generated) for the current expression `e`
       def topLevelConstraint(found: Type): List[Constraint] =
         List(Constraint(found, expected, e.position))
-      
+
+      def boolBinaryOp(lhs: Expr, rhs: Expr): List[Constraint] = {
+        val freshOperand = TypeVariable.fresh()
+        genConstraints(lhs, freshOperand) ++
+        genConstraints(rhs, freshOperand) ++
+        topLevelConstraint(BooleanType)
+        // Not sure about the ordering of this
+      }
+
+      def simpleBinaryOp(lhs: Expr, rhs: Expr, tpe: Type): List[Constraint] = {
+        genConstraints(lhs, tpe) ++
+        genConstraints(rhs, tpe) ++
+        topLevelConstraint(tpe)
+      }
+
       e match {
-        case IntLiteral(_) =>
-          topLevelConstraint(IntType)
-        
-        case Equals(lhs, rhs) =>
-          // HINT: Take care to implement the specified Amy semantics
-          ???  // TODO
-        
+        // Literals
+        case IntLiteral(_) => topLevelConstraint(IntType)
+        case StringLiteral(_) => topLevelConstraint(StringType)
+        case UnitLiteral() => topLevelConstraint(UnitType)
+        case BooleanLiteral(_) => topLevelConstraint(BooleanType)
+
+        case Variable(name) => {
+          env.get(name) match {
+            // Should never hit the None cas, handled by name analysis
+            case Some(tpe) => topLevelConstraint(tpe)
+          }
+        }
+
+        // Binary Operations
+        // HINT: Take care to implement the specified Amy semantics
+        case Plus(lhs, rhs) => simpleBinaryOp(lhs, rhs, IntType)
+        case Minus(lhs, rhs) => simpleBinaryOp(lhs, rhs, IntType)
+        case Times(lhs, rhs) => simpleBinaryOp(lhs, rhs, IntType)
+        case Div(lhs, rhs) => simpleBinaryOp(lhs, rhs, IntType)
+        case Mod(lhs, rhs) => simpleBinaryOp(lhs, rhs, IntType)
+
+        case LessThan(lhs, rhs) => boolBinaryOp(lhs, rhs)
+        case LessEquals(lhs, rhs) => boolBinaryOp(lhs, rhs)
+        case And(lhs, rhs) => boolBinaryOp(lhs, rhs)
+        case Or(lhs, rhs) => boolBinaryOp(lhs, rhs)
+        case Equals(lhs, rhs) => boolBinaryOp(lhs, rhs)
+
+        case Concat(lhs, rhs) => simpleBinaryOp(lhs, rhs, StringType)
+
+        case Not(e) =>
+          genConstraints(e, BooleanType) ++ topLevelConstraint(BooleanType)
+        case Neg(e) =>
+          genConstraints(e, IntType) ++ topLevelConstraint(BooleanType)
+
+        case Call(qname, args) => {
+          table.getFunction(qname) match {
+            case Some(funcSig) =>
+              args.zip(funcSig.argTypes).flatMap{
+                case (e, tpe) => genConstraints(e, tpe)
+              } ++ topLevelConstraint(funcSig.retType)
+          }
+        }
+        case Sequence(e1, e2) => {
+          val e2Type = TypeVariable.fresh()
+          genConstraints(e1, TypeVariable.fresh()) ++ // QUESTION The actual E1 we don't actually care about
+          genConstraints(e2, e2Type) ++
+          topLevelConstraint(e2Type)
+        }
+        case Let(df, value, body) => {
+          val ParamDef(name, tt) = df
+          val bodyType = TypeVariable.fresh()
+          genConstraints(value, tt.tpe) ++
+          genConstraints(body, bodyType)(env ++ Map(name -> tt.tpe)) ++
+          topLevelConstraint(bodyType)
+        }
+        case ite@Ite(cond, thenn, elze) => {
+          val iteType = TypeVariable.fresh()
+          genConstraints(cond, BooleanType) ++
+          genConstraints(thenn, iteType) ++
+          genConstraints(elze, iteType) ++
+          topLevelConstraint(iteType)
+        }
+
+        // Does not add any top level constraint, QUESTION
+        case Error(msg) => {
+          genConstraints(msg, StringType)
+        }
+
         case Match(scrut, cases) =>
           // Returns additional constraints from within the pattern with all bindings
           // from identifiers to types for names bound in the pattern.
           // (This is analogous to `transformPattern` in NameAnalyzer.)
           def handlePattern(pat: Pattern, scrutExpected: Type):
-            (List[Constraint], Map[Identifier, Type]) =
+            (List[Constraint], Map[Identifier, Type]) = pat match
           {
-            ???  // TODO
+            case WildcardPattern() => (Nil, Map())
+            case IdPattern(name) => (Nil, Map(name -> scrutExpected)) // Just adds a local, does not create a constraint
+            case LiteralPattern(lit) => (genConstraints(lit, scrutExpected), Map())
+            case CaseClassPattern(constr, args) => {
+              table.getConstructor(constr) match {
+                case Some(construtor) =>
+                  val subPatterns = args.zip(construtor.argTypes).map{
+                    case (pattern, tpe) => handlePattern(pattern, tpe)}
+                  (
+                    subPatterns.flatMap(_._1)
+                      :+ Constraint(construtor.retType, scrutExpected, pat.position),
+                    subPatterns.foldLeft(Map[Identifier, Type]())((acc, subPattern) => acc ++ subPattern._2)
+                  )
+              }
+            }
           }
 
           def handleCase(cse: MatchCase, scrutExpected: Type): List[Constraint] = {
             val (patConstraints, moreEnv) = handlePattern(cse.pat, scrutExpected)
-            ???  // TODO
+            genConstraints(cse.expr, scrutExpected)(env ++ moreEnv)
           }
 
           val st = TypeVariable.fresh()
           genConstraints(scrut, st) ++ cases.flatMap(cse => handleCase(cse, st))
-
-        case _ =>
-          ???  // TODO: Implement the remaining cases
       }
     }
 
@@ -90,10 +176,17 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
     def solveConstraints(constraints: List[Constraint]): Unit = {
       constraints match {
         case Nil => ()
-        case Constraint(found, expected, pos) :: more =>
+        case Constraint(found, expected, _) :: more if (found == expected) => solveConstraints(more)
+        case Constraint(found, expected, pos) :: more => expected match {
+          case tve@TypeVariable(id) => subst_*(more, id, found)// Eliminate
+          case _ => found match {
+            case tvf@TypeVariable(id) => subst_*(more, id, expected)// Orient && Eliminate
+            case _ => fatal(s"Expected type $expected, found $found instead", pos)
+            // Clash, equality would've been caught by case 2
+          }
+        }
           // HINT: You can use the `subst_*` helper above to replace a type variable
           //       by another type in your current set of constraints.
-          ???  // TODO
       }
     }
 
