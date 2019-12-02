@@ -91,6 +91,12 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
               args.zip(funcSig.argTypes).flatMap{
                 case (e, tpe) => genConstraints(e, tpe)
               } ++ topLevelConstraint(funcSig.retType)
+            case None => table.getConstructor(qname) match {
+              case Some(constrSig) =>
+                args.zip(constrSig.argTypes).flatMap{
+                  case (e, tpe) => genConstraints(e, tpe)
+                } ++ topLevelConstraint(constrSig.retType)
+            }
           }
         }
         case Sequence(e1, e2) => {
