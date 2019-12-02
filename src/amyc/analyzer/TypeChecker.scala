@@ -62,7 +62,7 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
 
         case Variable(name) => {
           env.get(name) match {
-            // Should never hit the None cas, handled by name analysis
+            // Should never hit the None case, handled by name analysis
             case Some(tpe) => topLevelConstraint(tpe)
           }
         }
@@ -132,6 +132,7 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
           // Returns additional constraints from within the pattern with all bindings
           // from identifiers to types for names bound in the pattern.
           // (This is analogous to `transformPattern` in NameAnalyzer.)
+          val exprType = TypeVariable.fresh()
           def handlePattern(pat: Pattern, scrutExpected: Type):
             (List[Constraint], Map[Identifier, Type]) = pat match
           {
@@ -142,7 +143,8 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
               table.getConstructor(constr) match {
                 case Some(construtor) =>
                   val subPatterns = args.zip(construtor.argTypes).map{
-                    case (pattern, tpe) => handlePattern(pattern, tpe)}
+                    case (pattern, tpe) => handlePattern(pattern, tpe)
+                  }
                   (
                     subPatterns.flatMap(_._1)
                       :+ Constraint(construtor.retType, scrutExpected, pat.position),
@@ -154,11 +156,13 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
 
           def handleCase(cse: MatchCase, scrutExpected: Type): List[Constraint] = {
             val (patConstraints, moreEnv) = handlePattern(cse.pat, scrutExpected)
-            genConstraints(cse.expr, scrutExpected)(env ++ moreEnv)
+            genConstraints(cse.expr, exprType)(env ++ moreEnv) ++ patConstraints
           }
 
           val st = TypeVariable.fresh()
-          genConstraints(scrut, st) ++ cases.flatMap(cse => handleCase(cse, st))
+          genConstraints(scrut, st) ++
+          cases.flatMap(cse => handleCase(cse, st)) ++
+          topLevelConstraint(exprType)
       }
     }
 
@@ -210,7 +214,8 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
       // Type-check expression if present. We allow the result to be of an arbitrary type by
       // passing a fresh (and therefore unconstrained) type variable as the expected type.
       val tv = TypeVariable.fresh()
-      mod.optExpr.foreach(e => solveConstraints(genConstraints(e, tv)(Map())))
+      printf("somehting")
+      mod.optExpr.foreach(e => {val cs =genConstraints(e, tv)(Map());println(cs);solveConstraints(cs)})
     }
 
     v

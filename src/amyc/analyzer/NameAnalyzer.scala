@@ -176,8 +176,6 @@ object NameAnalyzer extends Pipeline[N.Program, (S.Program, SymbolTable)] {
       }
 
       def getTypeFromQName(qName: N.QualifiedName) = {
-          println(qName)
-          println(module)
           val a = qName.module match {
             case None => {println("NOnish"); table.getType(module, qName.name)}
             case Some(otherModule) => table.getType(otherModule, qName.name)
@@ -209,7 +207,7 @@ object NameAnalyzer extends Pipeline[N.Program, (S.Program, SymbolTable)] {
           // Returns a transformed pattern along with all bindings
           // from strings to unique identifiers for names bound in the pattern.
           // Also, calls 'fatal' if a new name violates the Amy naming rules.
-          def transformPattern(pat: N.Pattern): (S.Pattern, List[(String, Identifier)]) = {table.print; pat match {
+          def transformPattern(pat: N.Pattern): (S.Pattern, List[(String, Identifier)]) = {pat match {
             case N.WildcardPattern() => (S.WildcardPattern(), Nil)
             case N.IdPattern(name) => {
               val s = newLocal(name)// Validity of name should be checked here
