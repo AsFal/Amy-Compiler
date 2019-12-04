@@ -9,6 +9,7 @@ import wasm._
 import Instructions._
 import Utils._
 
+
 // Generates WebAssembly code for an Amy program
 object CodeGen extends Pipeline[(Program, SymbolTable), Module] {
   def run(ctx: Context)(v: (Program, SymbolTable)): Module = {
@@ -45,12 +46,132 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module] {
       }
     }
 
+    def cgCaseClass(expr: Expr): Code = {
+
+    }
     // Generate code for an expression expr.
     // Additional arguments are a mapping from identifiers (parameters and variables) to
     // their index in the wasm local variables, and a LocalsHandler which will generate
     // fresh local slots as required.
-    def cgExpr(expr: Expr)(implicit locals: Map[Identifier, Int], lh: LocalsHandler): Code = {
-      ???  // TODO
+    def cgExpr(expr: Expr)(implicit locals: Map[Identifier, Int], lh: LocalsHandler): Code = expr match {
+      case Variable(name) => GetLocal(locals.get(name).flatten)
+
+      // Literals
+      case IntLiteral(i) => Const(i)
+      case BooleanLiteral(b) => if (b) Const(1) else Const(0)
+      case StringLiteral(s) => mkString(s)
+      case UnitLiteral() => Const(0) // QUESTION is this valid
+
+      // Binary operators
+      case Plus(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Add
+      case Minus(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Sub
+      case Times(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Mul
+      case AmyDiv(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Div
+      case Mod(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Rem
+      case LessThan(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Lt_s
+      case LessEquals(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Le_s
+      case AmyAnd(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> And
+      case AmyOr(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Or
+      case Equals(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Eq // CHECK
+
+      case Concat(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Call("String_concat")
+
+
+      case Not(e) => cgExpr(e) <:> Eqz
+      case Neg(e) => Const(0) <:> cgExpr(e) <:> Sub
+      case AmyCall(qname, args) =>
+        args.map(cgExpr(_)).fold(codeIdentity)(_ <:> _) <:> Call(
+          (table.getConstructor(qname), table.getFunction(qname)) match {
+            case (Some(constrSig), _) => {
+
+              val setFields =
+                cs2c(args.reverse.map(cgExpr)) <:>// This way left are at the top of the stack
+                // Type information Here
+                cs2c((1 to args.length()).map(
+                  (index: Int) =>
+                    GetGlobal(memoryBoundary) <:> Const(index) <:> Add <:>
+                    Store
+                ))
+              val setMemory =
+                GetGlobal(memoryBoundary) <:> GetGlobal(memoryBoundary) <:> Const((args.length() + 1) * 4) <:> Add <:>
+                  SetGlobal(memoryBoundary)
+
+              setFields <:> setMemory
+            }
+            case (_, Some(funcSig)) => fullName(funcSig.owner, qname)
+          }
+        )
+
+      case Sequence(e1, e2) => cgExpr(e1) <:> Drop <:> cgExpr(e2)
+      case Let(df, value, body) => {
+        val newLocalIndex = lh.getFreshLocal()
+        cgExpr(value) <:> SetLocal(localIndex) <:> cgExpr(body)(
+          locals ++ Map(df.name -> newLocalIndx)
+        )
+      }
+      case Ite(cond, thenn, elze) =>
+        cgExpr(cond) <:>
+          If_i32 <:> cgExpr(thenn) <:>
+          Else <:> cgExpr(elze) <:>
+          End
+
+      // case Match(scrut, cases) =>
+      case Match(scrut, cases) => {
+        def cgCase(cse: MatchCase): Code = {
+          val (cgCondition, cgLocals, moreLocals) = cgPattern(cse.pattern)
+          cgCondition <:>
+          If_i32 <:>
+          cgLocals <:> cgExpr(cse.expr)(locals ++ moreLocals) <:>
+          Else
+        }
+
+        // CodeGeneration For a condition
+        def cgPattern(p: Pattern): (Code, Code, Map[Identifier, Int]) = p match {
+          case WildcardPattern() => (Nil, Nil, Map())
+          case IdPattern(name) => {
+            val newLocalIndex = lh.getFreshLocal()
+            (
+              Nil,
+              SetLocal(newLocalindex)
+              Map(name -> newLocalIndex)
+            )
+          }
+          case LiteralPattern(lit) => (
+            cgGen(lit) <:> Eq,
+            Nil,
+            Map()
+          )
+          case CaseClassPattern(constr, args) => {
+            val tempLocal = lh.getFreshLocal()
+
+            val condition = SetLocal(tempLocal) <:> GetLocal(tempLocal)
+            Load <:> Const(0) <:> Eq <:> // Type id
+            args.zipWithIndex.map{
+              case (arg, i) =>
+              GetLocal(tempLocal) <:>
+              adtField(i) <:> Load <:>
+              cgPattern(arg)._2
+            }
+
+            val localsGeneration = args.zipWithIndex.map{
+              case (arg, i) =>
+                GetLocal(tempLocal) <:>
+                adtField(i) <:> Load <:>
+                cgPattern(arg)._1
+            }
+
+            val newEnv = args.map(cgPattern)
+              .fold(Map())(
+                (acc, patResults) => acc ++ patResults._3
+              )
+            (condition, localsGeneration, newEnv)
+          }
+        }
+
+        cgExpr(scrut) <:> cases.map(cgCase) <:> Unreachable <:> End
+      }
+      case Error(msg) => cgExpr(msg) <:> Unreachable
+
     }
 
     Module(
