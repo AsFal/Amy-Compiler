@@ -46,15 +46,14 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module] {
       }
     }
 
-    def cgCaseClass(expr: Expr): Code = {
-
-    }
     // Generate code for an expression expr.
     // Additional arguments are a mapping from identifiers (parameters and variables) to
     // their index in the wasm local variables, and a LocalsHandler which will generate
     // fresh local slots as required.
     def cgExpr(expr: Expr)(implicit locals: Map[Identifier, Int], lh: LocalsHandler): Code = expr match {
-      case Variable(name) => GetLocal(locals.get(name).flatten)
+      case Variable(name) => locals.get(name) match {
+        case Some(index) => GetLocal(index)
+      }
 
       // Literals
       case IntLiteral(i) => Const(i)
@@ -79,34 +78,41 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module] {
 
       case Not(e) => cgExpr(e) <:> Eqz
       case Neg(e) => Const(0) <:> cgExpr(e) <:> Sub
-      case AmyCall(qname, args) =>
-        args.map(cgExpr(_)).fold(codeIdentity)(_ <:> _) <:> Call(
+      case AmyCall(qname, args) => {
+        val cgFunctionBehavior =
           (table.getConstructor(qname), table.getFunction(qname)) match {
-            case (Some(constrSig), _) => {
+            // case (Some(constrSig), _) => {
 
-              val setFields =
-                cs2c(args.reverse.map(cgExpr)) <:>// This way left are at the top of the stack
-                // Type information Here
-                cs2c((1 to args.length()).map(
-                  (index: Int) =>
-                    GetGlobal(memoryBoundary) <:> Const(index) <:> Add <:>
-                    Store
-                ))
-              val setMemory =
-                GetGlobal(memoryBoundary) <:> GetGlobal(memoryBoundary) <:> Const((args.length() + 1) * 4) <:> Add <:>
-                  SetGlobal(memoryBoundary)
+            //   val setFields =
+            //     cs2c(args.reverse.map(cgExpr)) <:>
+            //     cs2c(
+            //       (1 to args.length)
+            //         .map(
+            //           (index: Int) =>
+            //             GetGlobal(memoryBoundary) <:> Const(index) <:> Add <:>
+            //             Store
+            //         )
+            //         .toList
+            //     )
 
-              setFields <:> setMemory
-            }
-            case (_, Some(funcSig)) => fullName(funcSig.owner, qname)
+            //   val setMemory =
+            //     GetGlobal(memoryBoundary) <:>
+            //       GetGlobal(memoryBoundary) <:> Const((args.length + 1) * 4) <:> Add <:>
+            //       SetGlobal(memoryBoundary)
+
+            //   setFields <:> setMemory
+            // }
+            case (_, Some(funcSig)) => Call(fullName(funcSig.owner, qname))
           }
-        )
+        cs2c(args.map(cgExpr(_))) <:> cgFunctionBehavior
+      }
 
       case Sequence(e1, e2) => cgExpr(e1) <:> Drop <:> cgExpr(e2)
       case Let(df, value, body) => {
         val newLocalIndex = lh.getFreshLocal()
-        cgExpr(value) <:> SetLocal(localIndex) <:> cgExpr(body)(
-          locals ++ Map(df.name -> newLocalIndx)
+        cgExpr(value) <:> SetLocal(newLocalIndex) <:> cgExpr(body)(
+          locals ++ Map(df.name -> newLocalIndex),
+          lh
         )
       }
       case Ite(cond, thenn, elze) =>
@@ -118,27 +124,27 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module] {
       // case Match(scrut, cases) =>
       case Match(scrut, cases) => {
         def cgCase(cse: MatchCase): Code = {
-          val (cgCondition, cgLocals, moreLocals) = cgPattern(cse.pattern)
+          val (cgCondition, cgLocals, moreLocals) = cgPattern(cse.pat)
           cgCondition <:>
           If_i32 <:>
-          cgLocals <:> cgExpr(cse.expr)(locals ++ moreLocals) <:>
+          cgLocals <:> cgExpr(cse.expr)(locals ++ moreLocals, lh) <:>
           Else
         }
 
         // CodeGeneration For a condition
         def cgPattern(p: Pattern): (Code, Code, Map[Identifier, Int]) = p match {
-          case WildcardPattern() => (Nil, Nil, Map())
+          case WildcardPattern() => (is2c(Nil), is2c(Nil), Map())
           case IdPattern(name) => {
             val newLocalIndex = lh.getFreshLocal()
             (
-              Nil,
-              SetLocal(newLocalindex)
+              is2c(Nil),
+              SetLocal(newLocalIndex),
               Map(name -> newLocalIndex)
             )
           }
           case LiteralPattern(lit) => (
-            cgGen(lit) <:> Eq,
-            Nil,
+            cgExpr(lit) <:> Eq,
+            is2c(Nil),
             Map()
           )
           case CaseClassPattern(constr, args) => {
@@ -161,8 +167,11 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module] {
             }
 
             val newEnv = args.map(cgPattern)
-              .fold(Map())(
-                (acc, patResults) => acc ++ patResults._3
+              .foldLeft(Map[Identifier, Int]())(
+                (
+                  acc: Map[Identifier, Int],
+                  patResults: (Code, Code, Map[Identifier, Int])
+                ) => acc ++ patResults._3
               )
             (condition, localsGeneration, newEnv)
           }
