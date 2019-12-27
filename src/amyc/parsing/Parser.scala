@@ -57,8 +57,8 @@ object Parser extends Pipeline[Iterator[Token], Program]
     }
 
   lazy val conversionDefinition: Syntax[ClassOrFunDef] =
-    (kw("implicit").skip ~ functionDefinition).map{
-      case imp ~ FunDef(name, params, retType, body) => ComparaisonDef(name, params, retType, body)
+    (kw("implicit") ~ functionDefinition).map{
+      case imp ~ FunDef(name, params, retType, body) => ConversionDef(name, params, retType, body).setPos(imp)
     }
 
   lazy val abstractClassDefinition: Syntax[ClassOrFunDef] =

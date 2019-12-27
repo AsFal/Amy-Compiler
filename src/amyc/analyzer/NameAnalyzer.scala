@@ -94,14 +94,14 @@ object NameAnalyzer extends Pipeline[N.Program, (S.Program, SymbolTable)] {
         case cd@N.ConversionDef(name, params, retType, body) => {
           if (params.length != 1) {
             fatal(s"Implicit conversion $name is badly formatted, it should only admit one parameter", cd.position)
-          } else if (params._1.tt.tpe == retType.tpe) { // Equals operator might not be defined for type class
+          } else if (params(0).tt.tpe == retType.tpe) { // Equals operator might not be defined for type class
             fatal(s"Implicit conversion $name is badly formatted, parameter type and return type should be the same", cd.position)
           } else {
             table.getConstructor(m.name, name) match {
               case None => Unit
               case Some(id) => fatal(s"Function $name cannot share a name with a class", cd.position)
             }
-            table.getConversion(params._1.tt.tpe, retType.tpe) match {
+            table.getConversion(m.name, transformType(params(0).tt, m.name), transformType(retType, m.name)) match {
               case None => Unit
               case Some(_) => fatal(s"Ambiguous conversions $name. There already exists another implicit conversion"
                 + "with the same type signature", cd.position)

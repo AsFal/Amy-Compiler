@@ -87,7 +87,7 @@ class SymbolTable {
 
   def addConversion(owner: String, name: String, argTypes: List[Type], retType: Type) = {
     val s = addFunction(owner, name, argTypes, retType)
-    val from = argTypes._1
+    val from = argTypes(0)
     val to = retType
     conversions += (owner, from, to) -> s
     s
