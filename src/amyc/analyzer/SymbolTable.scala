@@ -93,7 +93,7 @@ class SymbolTable {
     s
   }
 
-  def getconversion(symbol: Identifier) = functions.get(symbol)
+  def getConversion(symbol: Identifier) = functions.get(symbol)
 
   def getConversion(owner: String, from: Type, to: Type): Option[(Identifier, FunSig)] = {
     for {

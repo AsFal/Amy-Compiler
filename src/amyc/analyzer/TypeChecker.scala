@@ -4,6 +4,7 @@ package analyzer
 import utils._
 import ast.SymbolicTreeModule._
 import ast.Identifier
+import ConversionMapper._
 
 // The type checker for Amy
 // Takes a symbolic program and rejects it if it does not follow the Amy typing rules.
@@ -14,7 +15,7 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
 
     val (program, table) = v
 
-    case class Constraint(found: Type, expected: Type, pos: Position)
+    case class Constraint(found: Type, expected: Type, pos: Position, e: Option[Expr])
 
     // Represents a type variable.
     // It extends Type, but it is meant only for internal type checker use,
@@ -34,7 +35,10 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
       // This helper returns a list of a single constraint recording the type
       //  that we found (or generated) for the current expression `e`
       def topLevelConstraint(found: Type): List[Constraint] =
-        List(Constraint(found, expected, e.position))
+        List(Constraint(found, expected, e.position, Some(e)))
+        // We need the e so that we can replace the correct node with the conversion call
+        // upon reconstructing the tree
+        // TODO refactor and remove need for position
 
       def boolBinaryOp(lhs: Expr, rhs: Expr, ooperandType: Option[Type]): List[Constraint] = {
         val operandType = ooperandType match {
@@ -147,7 +151,7 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
                   }
                   (
                     subPatterns.flatMap(_._1)
-                      :+ Constraint(construtor.retType, scrutExpected, pat.position),
+                      :+ Constraint(construtor.retType, scrutExpected, pat.position, None),
                     subPatterns.foldLeft(Map[Identifier, Type]())((acc, subPattern) => acc ++ subPattern._2)
                   )
               }
@@ -178,47 +182,82 @@ object TypeChecker extends Pipeline[(Program, SymbolTable), (Program, SymbolTabl
         }
       }
 
-      constraints map { case Constraint(found, expected, pos) =>
-        Constraint(subst(found, from, to), subst(expected, from, to), pos)
+      constraints map { case Constraint(found, expected, pos, e) =>
+        Constraint(subst(found, from, to), subst(expected, from, to), pos, e)
       }
     }
+
+
 
     // Solve the given set of typing constraints and
     //  call `typeError` if they are not satisfiable.
     // We consider a set of constraints to be satisfiable exactly if they unify.
-    def solveConstraints(constraints: List[Constraint]): Unit = {
+    // TODO module is not actually a String
+    // In the current mode, it should work
+    // the conversions might just not be applied to the right location
+    def solveConstraints(constraints: List[Constraint])(implicit module: String): List[Conversion] = {
       constraints match {
-        case Nil => ()
-        case Constraint(found, expected, _) :: more if (found == expected) => solveConstraints(more)
-        case Constraint(found, expected, pos) :: more => expected match {
-          case tve@TypeVariable(id) => subst_*(more, id, found)// Eliminate
+        case Nil => Nil
+        case Constraint(found, expected, _, _) :: more if (found == expected)
+          => solveConstraints(more) // Useless constraint if already equal
+        case Constraint(found, expected, pos, eOp) :: more => expected match {
+          case tve@TypeVariable(id) => solveConstraints(subst_*(more, id, found))// Eliminate
           case _ => found match {
-            case tvf@TypeVariable(id) => subst_*(more, id, expected)// Orient && Eliminate
-            case _ => fatal(s"Expected type $expected, found $found instead", pos)
-            // Clash, equality would've been caught by case 2
+            case tvf@TypeVariable(id) => solveConstraints(subst_*(more, id, expected))// Orient && Eliminate
+
+            // This is the case where found and expected in the constraint are both
+            // types and they do not match ... ie the conflict case
+            case _ => {
+              // Here we should check if there exists a conversion in the table
+              // We also have to check if the constraint contains an expression
+              // that can be modified
+              {
+                for {
+                  e <- eOp
+                  conversionSig <- table.getConversion(module, found, expected)
+                  // Missing module information
+                  // Need to find a way to get the moduling information here
+                } yield (e, conversionSig)
+              } match {
+                case None => fatal(s"Expected type $expected, found $found instead", pos)
+                // TODO making this function tail recursive would be better
+                case Some((e, conversionSig)) => List(Conversion(e, conversionSig)) ++ solveConstraints(more)
+              }
+            }
           }
         }
-          // HINT: You can use the `subst_*` helper above to replace a type variable
-          //       by another type in your current set of constraints.
       }
     }
 
     // Putting it all together to type-check each module's functions and main expression.
-    program.modules.foreach { mod =>
+    // TODO Instead of module foreach, module AST get converted to mnew modules
+    // with appropriate conversion nodes
+    val newModules = program.modules.map { mod =>
       // Put function parameters to the symbol table, then typecheck them against the return type
-      mod.defs.collect { case FunDef(_, params, retType, body) =>
+      val newDefs = mod.defs.map { case FunDef(id, params, retType, body) =>
         val env = params.map{ case ParamDef(name, tt) => name -> tt.tpe }.toMap
-        solveConstraints(genConstraints(body, retType.tpe)(env))
+        val conversions = solveConstraints(genConstraints(body, retType.tpe)(env))(mod.name.name) // Module information here
+        FunDef(
+          id, params, retType,
+          ConversionMapper(table).setConversions(conversions).mapExpression(body))
+        case other => other
       }
 
       // Type-check expression if present. We allow the result to be of an arbitrary type by
       // passing a fresh (and therefore unconstrained) type variable as the expected type.
       val tv = TypeVariable.fresh()
-      printf("somehting")
-      mod.optExpr.foreach(e => {val cs =genConstraints(e, tv)(Map());println(cs);solveConstraints(cs)})
+      val newOptExpr = mod.optExpr match {
+        case None => None
+        case Some(e) => Some(
+          ConversionMapper(table).setConversions(
+            solveConstraints(genConstraints(e, tv)(Map()))(mod.name.name))
+          .mapExpression(e))
+      }
+      ModuleDef(mod.name, newDefs, newOptExpr)
     }
 
-    v
+    // v
+    (Program(newModules), table)
 
   }
 }
