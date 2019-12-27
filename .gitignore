@@ -14,3 +14,4 @@ compiler/package-lock.json
 project/*
 .vscode/
 submission.zip
+wasmout/
