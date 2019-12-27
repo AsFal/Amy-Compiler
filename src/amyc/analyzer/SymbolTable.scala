@@ -21,6 +21,8 @@ case class ConstrSig(argTypes: List[Type], parent: Identifier, index: Int) exten
 class SymbolTable {
 // All these should be private
   val defsByName = HashMap[(String, String), Identifier]()
+  val conversions = HashMap[(String, Type, Type), Identifier]()
+
   val modules = HashMap[String, Identifier]()
 
   val types = HashMap[Identifier, Identifier]()
@@ -83,6 +85,22 @@ class SymbolTable {
   }
   def getFunction(symbol: Identifier) = functions.get(symbol)
 
+  def addConversion(owner: String, name: String, argTypes: List[Type], retType: Type) = {
+    val s = addFunction(owner, name, argTypes, retType)
+    val from = argTypes._1
+    val to = retType
+    conversions += (owner, from, to) -> s
+    s
+  }
+
+  def getconversion(symbol: Identifier) = functions.get(symbol)
+
+  def getConversion(owner: String, from: Type, to: Type): Option[(Identifier, FunSig)] = {
+    for {
+      sym <- conversions.get(owner, from, to)
+      sig <- functions.get(sym)
+    } yield (sym, sig)
+  }
 
   def toStringO =
     s"Defs by name: \n${defsByName.toString()}\n" +
