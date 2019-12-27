@@ -1,13 +1,13 @@
 object BaseCase {
   implicit def int2bool(i: Int): Boolean = {i == 1}
 
-  val b: Int = true;
+  val b: Boolean = 3;
   2 || false;
   2 || b;
-  2 == false;
+  false == 2;
   if (true) {
-      2
+      false
   } else {
-      true
+      2
   }
 }
