@@ -56,7 +56,7 @@ object Lexer extends Pipeline[List[File], Iterator[Token]]
     word("abstract") | word("case") | word("class") |
     word("def") | word("else") | word("extends") |
     word("if") | word("match") | word("object") |
-    word("val") | word("error") | word("_")
+    word("val") | word("error") | word("_") | word("implicit")
       |> { (cs, range) => KeywordToken(cs.mkString).setPos(range._1) },
 
     // TODO: Primitive type names

@@ -45,7 +45,7 @@ object Parser extends Pipeline[Iterator[Token], Program]
 
   // A definition within a module.
   lazy val definition: Syntax[ClassOrFunDef] =
-    functionDefinition | abstractClassDefinition | classDefinition
+    functionDefinition | abstractClassDefinition | classDefinition | conversionDefinition
 
   lazy val functionDefinition: Syntax[ClassOrFunDef] =
     (kw("def")
@@ -54,6 +54,11 @@ object Parser extends Pipeline[Iterator[Token], Program]
     ~ delimiter("{").skip ~ expr ~ delimiter("}").skip
     ).map{
       case df ~ name ~ params ~ retType ~ body => FunDef(name, params, retType, body).setPos(df)
+    }
+
+  lazy val conversionDefinition: Syntax[ClassOrFunDef] =
+    (kw("implicit").skip ~ functionDefinition).map{
+      case imp ~ FunDef(name, params, retType, body) => ComparaisonDef(name, params, retType, body)
     }
 
   lazy val abstractClassDefinition: Syntax[ClassOrFunDef] =
