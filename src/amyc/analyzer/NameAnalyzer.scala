@@ -155,6 +155,11 @@ object NameAnalyzer extends Pipeline[N.Program, (S.Program, SymbolTable)] {
       }
       case fd: N.FunDef =>
         transformFunDef(fd, module).setPos(df)
+      case N.ConversionDef(name, params, retType, body) =>
+        // NOTE: additional type no longer needed
+        // At this point difference between implicit and clasic function
+        // is tracked by the symbol table
+        transformFunDef(N.FunDef(name, params, retType, body), module).setPos(df)
     }}
 
     def transformFunDef(fd: N.FunDef, module: String): S.FunDef = {
