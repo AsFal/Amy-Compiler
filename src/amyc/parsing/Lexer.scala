@@ -81,7 +81,7 @@ object Lexer extends Pipeline[List[File], Iterator[Token]]
 
     // TODO: Operators
     // NOTE: You can use `oneof("abc")` as a shortcut for `word("a") | word("b") | word("c")`
-    oneOf("+-*/%<") | word("<=") | word("&&") | word("||") | word("==") | word("++")
+    oneOf("+-*/%<!") | word("<=") | word("&&") | word("||") | word("==") | word("++")
       |> {(cs, range) => OperatorToken(cs.mkString).setPos(range._1)},
 
     // TODO: Identifiers
